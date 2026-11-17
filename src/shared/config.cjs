@@ -23,6 +23,7 @@ const DEFAULTS = Object.freeze({
 	},
 	telegram: {
 		notifications: "silent",
+		tables: "auto",
 		enabled: false,
 		chatId: "",
 		allowedUserId: "",

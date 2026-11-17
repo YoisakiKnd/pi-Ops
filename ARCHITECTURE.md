@@ -212,8 +212,18 @@ clipped to each chunk and persisted alongside it in one transaction. Retransmiss
 keys. An accepted marker is appended to the Pi transcript; SDK workers wait for
 acceptance before exiting. Thinking and raw tool output are not forwarded.
 Messages default to silent; `telegram.notifications` supports `silent`, `important`
-and `all`. Status cards and continuation chunks are always silent; link previews
-are disabled for final answers to keep replies compact.
+and `all`. Status cards and continuation chunks are always silent; ordinary text
+messages disable link previews to keep replies compact.
+
+Table-bearing documents within conservative rich-message limits are instead
+persisted as one `sendRichMessage` HTML payload together with their compatibility
+chunks. HTML comes only from the Markdown parser with raw HTML/media disabled.
+The native rich API renders bordered tables. Explicit 400/404 rejections switch
+the durable row to compatibility mode; transport ambiguity never falls back.
+Compatibility tables use `pre` entities, measured display widths and grapheme-safe
+cell wrapping. A cursor is saved after each acknowledged fallback chunk, so a 429
+retry resumes at the next chunk. `telegram.tables=monospace` selects compatibility
+delivery for older clients even when the API supports rich messages.
 
 Outbound states include pending, sending, sent, failed and uncertain. Rate limits
 retry after the server's delay. A network-ambiguous send or leader loss during a send

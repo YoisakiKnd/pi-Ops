@@ -59,8 +59,15 @@ a new turn; a busy session receives steering input. Send `/stop` in that topic t
 abort it. Assistant text is streamed as a best-effort draft. Only the final answer
 is sent durably when the task settles; tool-use commentary stays in drafts. Markdown
 headings, bold/italic/strikethrough, quotes, links and code blocks render through native
-Telegram entities. Long answers preserve formatting across Unicode-safe chunks;
-tables use readable text rows. Thinking and raw tool outputs are excluded.
+Telegram entities. Long answers preserve formatting across Unicode-safe chunks.
+Answers containing Markdown tables use Telegram's native rich-message API, with
+bordered tables and inline cell formatting. On an explicit API rejection, the
+broker falls back to bordered, monospaced tables with CJK-aware column alignment
+and wrapped cells. Ambiguous sends never trigger an automatic second message.
+Very large/complex answers also use bounded compatibility chunks. Native tables
+require a Telegram client that supports rich messages; set `telegram.tables` to
+`"monospace"` for older clients (`"auto"` is the default). Restart the broker/service
+after changing this setting. Thinking and raw tool outputs are excluded.
 
 Messages are **silent by default**, and the pinned status card updates in place.
 Set `telegram.notifications` in `config.json` to `"important"` to enable alerts for
@@ -130,7 +137,7 @@ Pi can call `telegram_send_file` with `path` and optional `caption` to queue a f
 for that same topic. Uploads are capped at 50 MiB, and files resolving outside the
 project are refused. Queue acceptance is separate from upload completion; failed or
 uncertain uploads appear in `/ops tg status`. Scheduled Agent tasks needing this
-capability must include `telegram_send_file` in their tools list.
+capability must include `telegram_send_file` if they explicitly restrict their tools.
 
 In the bot's main chat (outside session topics), use:
 
@@ -183,7 +190,8 @@ request key and resumes waiting; duplicate updates do not toggle twice. Account,
 chat, topic and question message ID are checked on every selection. This preserves
 connection recovery, not an in-memory tool call after its entire Pi process exits.
 A send whose result is unknown is retained as uncertain for inspection.
-Scheduled tasks must explicitly enable `telegram_ask_user_question` in their tools.
+Scheduled tasks inherit Pi tools by default. If a task explicitly restricts its tools,
+include `telegram_ask_user_question` to keep questions available.
 
 ## Optional background service
 
@@ -291,7 +299,19 @@ Inside Pi, ask for recurring work:
 
 Pi can call `ops_schedule` with a name, prompt and `everySeconds`. This saves an
 Agent task and starts the scheduler. It returns the task ID and explicitly reports
-whether background startup succeeded. An alternative is to create it manually:
+whether background startup succeeded.
+
+You can also ask inside the project's Telegram topic, for example:
+
+```text
+每隔 30 分钟检查这台机器的磁盘、内存和失败的 systemd 服务，并向 TG 汇报结果。
+```
+
+This is a fixed-interval schedule (`everySeconds=1800`). Scheduling is implemented
+and persisted in `schedule.db`; it is not a reminder held only in the current chat.
+Daily wall-clock times such as “每天 9 点”, cron expressions and one-shot timers
+are not implemented. Pi should not claim to have saved those schedules as requested.
+Create tasks manually, or inspect/manage them in Pi using:
 
 ```text
 /ops agent-add deployment-audit 3600 检查当前项目的部署状态，结合历史记忆汇报异常
@@ -384,7 +404,7 @@ check finishes, and manual runs remain available. Resume resets the failure stre
 Settings in `config.json` include `port` (default 43917), `schedule.enabled`, and
 `schedule.misfireGraceMs` (default ten minutes). Stop the daemon before changing its
 port. Up to four checks run concurrently, with one active run per task.
-The HTTP task currently uses fixed intervals; cron schedules are later work.
+Both Agent tasks and HTTP checks currently use fixed intervals; cron schedules are later work.
 Scheduling requires `node:sqlite`, even when memory is using its fallback scan.
 
 **Keep `schedule.db`: it contains authoritative task and event history.** Unlike

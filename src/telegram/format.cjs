@@ -1,4 +1,29 @@
 const markdown = require('markdown-it')({ html: false, linkify: false });
+const { renderTable } = require('./table.cjs');
+
+// Render only parser-generated HTML. Raw HTML and automatic media uploads are
+// excluded; supported rich table attributes are explicit rather than CSS.
+markdown.renderer.rules.table_open = () => '<table bordered striped compact>\n';
+for (const type of ['thead_open', 'thead_close', 'tbody_open', 'tbody_close']) markdown.renderer.rules[type] = () => '';
+for (const tag of ['th', 'td']) markdown.renderer.rules[`${tag}_open`] = (tokens, index) => {
+	const align = tokens[index].attrGet('style')?.match(/text-align:\s*(left|right|center)/)?.[1];
+	return `<${tag}${align ? ` align="${align}"` : ''}>`;
+};
+markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content);
+
+function richTableMessage(source) {
+	// Larger/overly complex documents use the bounded entity renderer below.
+	if (source.length > 20000) return null;
+	const tokens = markdown.parse(source, {});
+	if (!tokens.some(token => token.type === 'table_open')) return null;
+	if (tokens.filter(token => token.nesting === 1 || token.type === 'fence').length > 400 || tokens.some(token => token.level > 12)) return null;
+	let columns = 0;
+	for (const token of tokens) {
+		if (token.type === 'tr_open') columns = 0;
+		if (['th_open', 'td_open'].includes(token.type) && ++columns > 20) return null;
+	}
+	return { html: markdown.renderer.render(tokens, markdown.options, {}) };
+}
 
 // Parse before splitting. Telegram entity offsets and lengths use UTF-16 units,
 // so even a code block spanning several messages retains valid formatting.
@@ -26,7 +51,8 @@ function formatMarkdown(source, limit = 3500) {
 		if (text && existing < count) append('\n'.repeat(count - existing));
 	}
 	function walk(tokens) {
-		for (const [index, token] of tokens.entries()) {
+		for (let index = 0; index < tokens.length; index++) {
+			const token = tokens[index];
 			switch (token.type) {
 				case 'inline': walk(token.children || []); break;
 				case 'text': append(token.content); break;
@@ -55,19 +81,12 @@ function formatMarkdown(source, limit = 3500) {
 				}
 				case 'list_item_close': newline(); break;
 				case 'hr': newline(); append('────────'); newline(2); break;
-				case 'table_open': newline(); break;
-				case 'th_open': active.push({ type: 'bold' }); break;
-				case 'th_close': active.pop(); break;
-				case 'td_open': case 'tr_open': break;
-				case 'td_close': break;
-				case 'tr_close': newline(); break;
-				case 'table_close': newline(2); break;
+				case 'table_open': {
+					const end = tokens.findIndex((item, position) => position > index && item.type === 'table_close');
+					newline(2); append(renderTable(tokens.slice(index, end + 1)), [{ type: 'pre' }]); newline(2);
+					index = end; break;
+				}
 				case 'image': append(token.content); break;
-			}
-			// Tables have no native Telegram equivalent; keep cells readable.
-			if (['td_close', 'th_close'].includes(token.type)) {
-				const next = tokens[index + 1];
-				if (next && ['td_open', 'th_open'].includes(next.type)) append(' | ');
 			}
 		}
 	}
@@ -78,6 +97,10 @@ function formatMarkdown(source, limit = 3500) {
 	for (let start = 0; start < text.length;) {
 		let end = Math.min(text.length, start + limit);
 		if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end--;
+		if (end < text.length) {
+			const lineEnd = text.lastIndexOf('\n', end - 1) + 1;
+			if (lineEnd > start + limit / 2) end = lineEnd;
+		}
 		const overlapping = ranges.filter(entity => entity.offset < end && entity.offset + entity.length > start)
 			.sort((a, b) => a.offset - b.offset || b.length - a.length);
 		if (overlapping.length > 100) end = overlapping[100].offset;
@@ -93,4 +116,4 @@ function formatMarkdown(source, limit = 3500) {
 function silent(settings, important = false, continuation = false) {
 	return continuation || !(settings.notifications === 'all' || (settings.notifications === 'important' && important));
 }
-module.exports = { formatMarkdown, silent };
+module.exports = { formatMarkdown, richTableMessage, silent };

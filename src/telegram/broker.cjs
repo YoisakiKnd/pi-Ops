@@ -117,11 +117,12 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 					const threadId = item.kind === 'notice' ? payload.threadId : await topic(item.session_id);
 					const upload = item.kind === 'file' ? uploadFile(state.getSession(db,item.session_id).cwd,payload.file) : null;
 					db.prepare("UPDATE tg_outbox SET status='sending' WHERE key=?").run(item.key);
-					// Each queued row is already one bounded Telegram chunk.
+					// A rich message owns its bounded compatibility chunks. Persist
+					// their cursor after each send so rate-limit retries don't repeat them.
 					const disable_notification = silent(settings, /^(incident:|wake-result:|action-error:)/.test(item.key), payload.continuation);
 					const sent = upload
 						? await api('sendDocument', { chat_id:settings.chatId, message_thread_id:threadId, caption:payload.caption, disable_notification }, controller.signal, upload)
-						: await api('sendMessage', { chat_id:settings.chatId, ...(threadId ? {message_thread_id:threadId} : {}), text:item.text || '(empty response)', entities:payload.entities || [], disable_notification, link_preview_options:{is_disabled:true} }, controller.signal);
+						: await sendText(item, payload, threadId, disable_notification);
 					db.prepare("UPDATE tg_outbox SET status='sent',message_id=?,error=NULL WHERE key=?").run(sent.message_id, item.key);
 				} catch (failure) {
 					const retry = failure.code === 429;
@@ -144,6 +145,29 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 			await controls.flushCards(db, settings, api, controller.signal);
 			await questions.flush(db,settings,api,topic,controller.signal);
 		} finally { flushing = false; }
+	}
+	async function sendText(item, payload, threadId, disable_notification) {
+		const params = { chat_id:settings.chatId, ...(threadId ? {message_thread_id:threadId} : {}), disable_notification };
+		const save = () => db.prepare('UPDATE tg_outbox SET payload=? WHERE key=?').run(JSON.stringify(payload), item.key);
+		if (payload.rich && !payload.compatibility && settings.tables !== 'monospace') {
+			try { return await api('sendRichMessage', { ...params, rich_message:payload.rich }, controller.signal); }
+			catch (failure) {
+				// Only an explicit rejection permits a second send. An unknown
+				// transport result might already be visible and must stay uncertain.
+				if (![400, 404].includes(failure.code)) throw failure;
+				payload.compatibility = true; save();
+			}
+		}
+		if (payload.rich) {
+			payload.compatibility = true; save();
+			for (let index = payload.cursor || 0; index < payload.fallback.length; index++) {
+				const sent = await api('sendMessage', { ...params, ...payload.fallback[index],
+					disable_notification: index > 0 || disable_notification, link_preview_options:{is_disabled:true} }, controller.signal);
+				payload.cursor = index + 1; payload.lastMessageId = sent.message_id; save();
+			}
+			return { message_id:payload.lastMessageId };
+		}
+		return api('sendMessage', { ...params, text:item.text || '(empty response)', entities:payload.entities || [], link_preview_options:{is_disabled:true} }, controller.signal);
 	}
 	async function wakePending() {
 		if (!settings.wakeMode || stopping) return;

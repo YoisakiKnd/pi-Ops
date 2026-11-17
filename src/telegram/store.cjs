@@ -1,4 +1,4 @@
-const { formatMarkdown } = require('./format.cjs');
+const { formatMarkdown, richTableMessage } = require('./format.cjs');
 // Tables share schedule.db so one leader owns both scheduling and TG delivery.
 function initialize(db) {
 	db.exec(`CREATE TABLE IF NOT EXISTS tg_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -43,7 +43,13 @@ function enqueue(db, key, id, text) {
 		// Keep the original persisted chunks on reconnect, including queues from
 		// older formatting versions whose chunk boundaries may differ.
 		if (db.prepare('SELECT 1 FROM tg_outbox WHERE key=?').get(`${key}:0`)) return;
-		for (const [index, part] of formatMarkdown(text).entries()) {
+		const rich = richTableMessage(text), parts = formatMarkdown(text);
+		if (rich) {
+			db.prepare('INSERT INTO tg_outbox(key,session_id,text,payload) VALUES(?,?,?,?)')
+				.run(`${key}:0`, id, text, JSON.stringify({ rich, fallback: parts }));
+			return;
+		}
+		for (const [index, part] of parts.entries()) {
 			db.prepare('INSERT OR IGNORE INTO tg_outbox(key,session_id,text,payload) VALUES(?,?,?,?)')
 				.run(`${key}:${index}`, id, part.text, JSON.stringify({ entities: part.entities, continuation: index > 0 }));
 		}

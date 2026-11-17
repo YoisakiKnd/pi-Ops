@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.3]
+
+- Send answers containing Markdown tables through Telegram's native `sendRichMessage` API, preserving table cells, inline formatting and headings.
+- Replace pipe-separated compatibility output with bordered, monospaced tables. Correctly measure CJK, emoji and combining characters; wrap long cells and keep message chunks Unicode-safe.
+- Fall back only after an explicit rich-message rejection; ambiguous network results stay uncertain. Persist the fallback chunk cursor so rate-limit retries do not repeat acknowledged chunks.
+- Add `telegram.tables="monospace"` for older Telegram clients; the default `"auto"` prefers native tables.
+- Clarify existing fixed-interval Pi Agent scheduling and its natural-language/tool/command entry points. Calendar/cron scheduling is not yet implemented.
+
+Run `bun install --frozen-lockfile --ignore-scripts` after updating, restart the broker/service, and reload open Pi sessions. No setup rerun is needed. Native tables require a Telegram client that supports rich messages.
+
 ## [0.1.2]
 
 - Send only the final answer at task settlement; intermediate assistant/tool-use commentary stays in ephemeral drafts.

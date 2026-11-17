@@ -125,6 +125,60 @@ test('broker sends rendered entities durably, quietly and without repeated chunk
 	assert.equal(mock.calls.findLast(call => call.method === 'sendMessage').params.disable_notification, true);
 });
 
+const tableReply = '| 指标 | 当前值 |\n| --- | --- |\n| 内存 | **9.7Gi** |';
+test('table answers use one native rich message and retain quiet topic routing', async t => {
+	const db=fixture(t), mock=mockApi(); state.register(db,session);
+	const broker=createBroker(db,settings,{api:mock.call.bind(mock)});t.after(()=>broker.close());
+	state.enqueue(db,'table',session.id,tableReply); await broker.flush();
+	const messages=mock.calls.filter(call=>call.method==='sendRichMessage');
+	assert.equal(messages.length,1);
+	assert.match(messages[0].params.rich_message.html,/<table bordered striped compact>/);
+	assert.equal(messages[0].params.message_thread_id,state.getSession(db,session.id).topic_id);
+	assert.equal(messages[0].params.disable_notification,true);
+	assert.ok(!mock.calls.some(call=>call.method==='sendMessage'&&!call.params.reply_markup));
+	assert.equal(db.prepare('SELECT status FROM tg_outbox').get().status,'sent');
+});
+
+test('rich-message rejection falls back once, while uncertain sends never duplicate delivery', async t => {
+	for(const code of [404,400,'uncertain',429]) {
+		const db=fixture(t),mock=mockApi();state.register(db,session);
+		const broker=createBroker(db,settings,{api:async(method,...args)=>{
+			if(method==='sendRichMessage')throw new TelegramError('injected rich response',code,1);
+			return mock.call(method,...args);
+		}});t.after(()=>broker.close());
+		state.enqueue(db,'table',session.id,tableReply);await broker.flush();
+		const messages=mock.calls.filter(call=>call.method==='sendMessage'&&!call.params.reply_markup);
+		if([400,404].includes(code)) {
+			assert.equal(messages.length,1);assert.match(messages[0].params.text,/┌.*┐/);
+			assert.ok(messages[0].params.entities.some(entity=>entity.type==='pre'));
+			assert.equal(db.prepare('SELECT status FROM tg_outbox').get().status,'sent');
+		}else {
+			assert.equal(messages.length,0);
+			assert.equal(db.prepare('SELECT status FROM tg_outbox').get().status,code===429?'pending':'uncertain');
+		}
+	}
+});
+
+test('compatibility table retries resume after acknowledged chunks without notifying repeatedly', async t => {
+	const db=fixture(t),mock=mockApi();state.register(db,session);let sends=0,limited=true;
+	const broker=createBroker(db,{...settings,notifications:'all',tables:'monospace'},{api:async(method,...args)=>{
+		assert.notEqual(method,'sendRichMessage','monospace mode must support older Telegram clients');
+		if(method==='sendMessage'&&!args[0].reply_markup&&++sends===2&&limited)throw new TelegramError('rate limit',429,1);
+		return mock.call(method,...args);
+	}});t.after(()=>broker.close());
+	const rows=Array.from({length:120},(_,i)=>`| row${i} | 中文🚀 |`).join('\n');
+	state.enqueue(db,'table',session.id,'| 项目 | 状态 |\n| --- | --- |\n'+rows);
+	await broker.flush();
+	const partial=db.prepare('SELECT * FROM tg_outbox').get();assert.equal(partial.status,'pending');
+	assert.equal(JSON.parse(partial.payload).cursor,1);
+	limited=false;db.exec('UPDATE tg_outbox SET next_at=0');await broker.flush();
+	const saved=db.prepare('SELECT * FROM tg_outbox').get();assert.equal(saved.status,'sent');
+	const messages=mock.calls.filter(call=>call.method==='sendMessage'&&!call.params.reply_markup);
+	assert.equal(messages.length,JSON.parse(saved.payload).fallback.length);
+	assert.equal(messages[0].params.disable_notification,false);
+	assert.ok(messages.slice(1).every(call=>call.params.disable_notification));
+});
+
 test('broker restart marks ambiguous sends and wakes uncertain without automatic replay', t => {
 	const db = fixture(t); state.register(db, session); state.enqueue(db, 'send', session.id, 'answer');
 	db.exec("UPDATE tg_outbox SET status='sending'; UPDATE tg_sessions SET topic_state='creating'; INSERT INTO tg_inbox VALUES(1,'session-a','partial action','waking',0)");
