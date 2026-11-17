@@ -8,6 +8,7 @@ function readTelegram() {
 	const raw = config.telegram;
 	if (!raw?.enabled) return null;
 	if (raw.enabled !== true || typeof raw.wakeMode !== 'boolean') throw new Error('Telegram enabled/wakeMode must be booleans');
+	if (!['silent', 'important', 'all'].includes(raw.notifications)) throw new Error('Telegram notifications must be silent, important or all');
 	const token = fs.readFileSync(TOKEN_PATH, 'utf8').trim();
 	if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('Invalid Telegram token; run node setup.cjs');
 	const chatId = Number(raw.chatId), allowedUserId = Number(raw.allowedUserId);

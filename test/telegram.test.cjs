@@ -10,7 +10,7 @@ process.env.PI_CODING_AGENT_DIR = dir;
 const schedule = require('../src/schedule/store.cjs');
 const state = require('../src/telegram/store.cjs');
 const { createBroker } = require('../src/telegram/broker.cjs');
-const { createClient } = require('../src/telegram/client.cjs');
+const { createClient, attachTelegram } = require('../src/telegram/client.cjs');
 const { createApi, TelegramError } = require('../src/telegram/api.cjs');
 const { startDaemon } = require('../src/schedule/runtime.cjs');
 const { readLines, send } = require('../src/telegram/protocol.cjs');
@@ -64,6 +64,65 @@ test('outbox chunks Unicode text and deduplicates retries', t => {
 	const rows = db.prepare('SELECT * FROM tg_outbox ORDER BY rowid').all();
 	assert.equal(rows.length, 5); assert.equal(rows.map(row => row.text).join(''), text);
 	assert.ok(rows.every(row => row.text.length <= 3500));
+	state.enqueue(db, 'answer', session.id, '**x** '.repeat(15000));
+	assert.deepEqual(db.prepare('SELECT * FROM tg_outbox ORDER BY rowid').all(), rows, 'replay preserves the original durable formatting and chunk boundaries');
+});
+
+test('Pi tool-use commentary stays in drafts and settlement sends only the final answer', async () => {
+	const hooks = new Map(), finals = [], drafts = [], statuses = [];
+	const pi = { on: (event, handler) => hooks.set(event, handler) };
+	attachTelegram(pi, { readSettings: () => ({}), makeClient: () => ({
+		open: async () => {}, close: async () => {}, draft: text => drafts.push(text),
+		final: text => finals.push(text), status: (...args) => statuses.push(args),
+	}) });
+	const emit = async (event, value = {}) => hooks.get(event)?.(value, { sessionManager: {getSessionId:()=> 'test'} });
+	const assistant = text => ({message:{role:'assistant',content:[{type:'text',text}]}});
+	await emit('session_start');
+	await emit('before_agent_start', { messageType:'user', prompt:'检查服务器' });
+	for (let i = 0; i < 15; i++) {
+		await emit('agent_start');
+		await emit('message_update', assistant(`检查第 ${i} 项…`));
+		await emit('message_end', assistant(`准备调用工具 ${i}`));
+		await emit('tool_execution_start', {toolName:'bash'});
+		await emit('message_end', {message:{role:'toolResult',content:[{type:'text',text:'raw output'}]}});
+	}
+	assert.deepEqual(finals, []);
+	await emit('message_end', assistant('## 检查完成\n\n**正常**'));
+	await emit('agent_settled', {aborted:false});
+	await emit('agent_settled', {aborted:false});
+	assert.deepEqual(finals, ['## 检查完成\n\n**正常**']);
+	assert.ok(drafts.length >= 15);
+	assert.equal(statuses.at(-1)[0], 'Ready');
+	await emit('before_agent_start', {messageType:'user',prompt:'下一项'});
+	await emit('agent_settled', {aborted:true});
+	assert.equal(finals.length, 1, 'no stale answer from the previous task');
+	await emit('message_end', assistant('部分结果'));
+	await emit('agent_settled', {aborted:true});
+	assert.match(finals.at(-1), /部分结果[\s\S]*partial response/);
+	await emit('session_shutdown');
+});
+
+test('broker sends rendered entities durably, quietly and without repeated chunk alerts', async t => {
+	const db = fixture(t); state.register(db, session);
+	const mock = mockApi();
+	const config = {...settings, notifications:'all'};
+	const broker = createBroker(db, config, {api:mock.call.bind(mock)});
+	t.after(() => broker.close());
+	state.enqueue(db, 'formatted', session.id, '**结果**\n\n```sh\n' + 'echo 🚀\n'.repeat(800) + '```');
+	const rows = db.prepare('SELECT * FROM tg_outbox ORDER BY rowid').all();
+	assert.ok(rows.length > 1);
+	assert.ok(JSON.parse(rows[0].payload).entities.some(entity => entity.type === 'bold'));
+	await broker.flush();
+	const sends = mock.calls.filter(call => call.method === 'sendMessage' && !call.params.reply_markup);
+	assert.equal(sends.length, rows.length);
+	assert.equal(sends[0].params.disable_notification, false);
+	assert.ok(sends.slice(1).every(call => call.params.disable_notification === true));
+	assert.ok(sends.every(call => call.params.entities.some(entity => entity.type === 'pre')));
+	assert.ok(mock.calls.find(call => call.method === 'sendMessage' && call.params.reply_markup).params.disable_notification);
+	assert.equal(db.prepare("SELECT count(*) AS n FROM tg_outbox WHERE status='sent'").get().n, rows.length);
+	config.notifications = 'silent';
+	state.enqueue(db, 'quiet', session.id, '**静默**'); await broker.flush();
+	assert.equal(mock.calls.findLast(call => call.method === 'sendMessage').params.disable_notification, true);
 });
 
 test('broker restart marks ambiguous sends and wakes uncertain without automatic replay', t => {
@@ -306,6 +365,7 @@ test('remote /new creates one fixed session ID and starts only within allowed ro
 	await broker.step([request]);await until(()=>tasks.length===1);await broker.step([request]);
 	assert.equal(db.prepare('SELECT count(*) AS n FROM tg_remote').get().n,1);
 	const created=db.prepare('SELECT * FROM tg_sessions').get();
+	assert.equal(db.prepare("SELECT count(*) AS n FROM tg_outbox WHERE key LIKE 'new:500:%'").get().n,0,'prompted sessions need no extra welcome message');
 	assert.equal(tasks[0].newSessionId,created.id);assert.equal(tasks[0].prompt,'Inspect the project');assert.equal(tasks[0].resumeSessionFile,undefined);
 	await broker.step([{update_id:501,message:{chat:{id:123},from:{id:123},text:'/new /private/tmp | do work'}}]);
 	assert.equal(db.prepare('SELECT status FROM tg_actions WHERE update_id=501').get().status,'failed');

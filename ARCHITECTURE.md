@@ -203,11 +203,17 @@ Only the leader polls TG. Clients acknowledge accepted prompts; delivery IDs are
 also appended to Pi session entries to deduplicate reconnects.
 
 Session topics are created lazily on first output, and their IDs persist across
-leader changes. Live draft updates are throttled and ephemeral. Final assistant
-text is recorded in the Pi transcript as a pending send, accepted durably by the
-broker, then split into bounded Unicode-safe chunks. Retransmission uses stable
+leader changes. Live draft updates are throttled and ephemeral. Intermediate
+assistant messages never become durable messages; the final answer is captured at
+`agent_settled`, after retries and queued continuations finish. Final text is recorded
+in the Pi transcript as a pending send and accepted durably by the broker. Markdown
+is parsed before Unicode-safe splitting, with native Telegram UTF-16 entity ranges
+clipped to each chunk and persisted alongside it in one transaction. Retransmission uses stable
 keys. An accepted marker is appended to the Pi transcript; SDK workers wait for
 acceptance before exiting. Thinking and raw tool output are not forwarded.
+Messages default to silent; `telegram.notifications` supports `silent`, `important`
+and `all`. Status cards and continuation chunks are always silent; link previews
+are disabled for final answers to keep replies compact.
 
 Outbound states include pending, sending, sent, failed and uncertain. Rate limits
 retry after the server's delay. A network-ambiguous send or leader loss during a send

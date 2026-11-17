@@ -1,4 +1,5 @@
 const { randomBytes } = require('node:crypto');
+const { formatMarkdown, silent } = require('./format.cjs');
 function initialize(db) {
  db.exec(`CREATE TABLE IF NOT EXISTS tg_questions(id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,session_id TEXT NOT NULL,
  text TEXT NOT NULL,options TEXT NOT NULL,multiple INTEGER NOT NULL,selected TEXT NOT NULL DEFAULT '[]',answer TEXT,
@@ -42,7 +43,8 @@ async function flush(db,settings,api,topic,signal) {
    if(!row.message_id&&row.status==='pending'){
     const thread=await topic(row.session_id);
     if(!db.prepare("UPDATE tg_questions SET status='sending' WHERE id=? AND status='pending' AND expires_at>?").run(row.id,Date.now()).changes)continue;
-    const message=await api('sendMessage',{chat_id:settings.chatId,message_thread_id:thread,text:row.text,reply_markup:keyboard({...row,status:'open'})},signal);
+    const formatted=formatMarkdown(row.text,4096);
+    const message=await api('sendMessage',{chat_id:settings.chatId,message_thread_id:thread,...(formatted.length===1?formatted[0]:{text:row.text}),disable_notification:silent(settings,true),reply_markup:keyboard({...row,status:'open'})},signal);
     db.prepare("UPDATE tg_questions SET message_id=?,dirty=CASE WHEN status='sending' THEN 0 ELSE 1 END,status=CASE WHEN status='sending' THEN 'open' ELSE status END WHERE id=?").run(message.message_id,row.id);
    }else if(row.message_id){await api('editMessageReplyMarkup',{chat_id:settings.chatId,message_id:row.message_id,reply_markup:keyboard(row)},signal);db.prepare('UPDATE tg_questions SET dirty=0 WHERE id=? AND selected=? AND status=?').run(row.id,row.selected,row.status);}
    else db.prepare('UPDATE tg_questions SET dirty=0 WHERE id=?').run(row.id);

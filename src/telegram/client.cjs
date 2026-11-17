@@ -159,26 +159,38 @@ function assistantText(message) {
 	return message?.role === 'assistant' && Array.isArray(message.content)
 		? message.content.filter(block => block.type === 'text').map(block => block.text).join('\n') : '';
 }
-function attachTelegram(pi) {
-	let client;
+function attachTelegram(pi, { readSettings = readTelegram, makeClient = createClient } = {}) {
+	let client, pendingText = '';
 	const report = error => process.stderr.write(`[pi-ops] Telegram bridge: ${error.message}\n`);
 	pi.on('session_start', async (_event, ctx) => {
-		await client?.close(); client = undefined;
+		await client?.close(); client = undefined; pendingText = '';
 		try {
-			if (!readTelegram() || !ctx.sessionManager?.getSessionId) return;
-			client = createClient(pi, ctx); await client.open();
+			if (!readSettings() || !ctx.sessionManager?.getSessionId) return;
+			client = makeClient(pi, ctx); await client.open();
 		} catch (error) { report(error); }
 	});
 	pi.on('message_update', event => {
 		if (client) { try { client.draft(assistantText(event.message)); } catch (error) { report(error); } }
 	});
 	pi.on('message_end', event => {
-		if (client) { try { client.final(assistantText(event.message)); } catch (error) { report(error); } }
+		if (client && event.message?.role === 'assistant') {
+			// Tool-use commentary stays ephemeral; only the final assistant answer
+			// from this task is persisted when Pi reports agent_settled.
+			pendingText = assistantText(event.message);
+			try { client.draft(pendingText); } catch (error) { report(error); }
+		}
 	});
-	pi.on('before_agent_start', event => { if (client && event.messageType === 'user') client.status('Working','Preparing task',String(event.prompt).slice(0,20000)); });
+	pi.on('before_agent_start', event => { if (client && event.messageType === 'user') { pendingText = ''; client.status('Working','Preparing task',String(event.prompt).slice(0,20000)); } });
 	pi.on('agent_start', () => client?.status('Working','Running'));
 	pi.on('tool_execution_start', event => client?.status('Working',`Tool: ${String(event.toolName).slice(0,100)}`));
-	pi.on('agent_settled', event => client?.status(event.aborted ? 'Stopped' : 'Ready',''));
+	pi.on('agent_settled', event => {
+		if (!client) return;
+		try {
+			if (pendingText.trim()) client.final(event.aborted ? `${pendingText}\n\n[Task stopped; partial response.]` : pendingText);
+		} catch (error) { report(error); }
+		finally { pendingText = ''; }
+		client.status(event.aborted ? 'Stopped' : 'Ready','');
+	});
 	pi.on('session_shutdown', async () => {
 		await client?.close(); client = undefined;
 		if (inlineLeader) { const leader = inlineLeader; inlineLeader = undefined; await leader.close(); }

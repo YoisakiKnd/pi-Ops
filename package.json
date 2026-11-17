@@ -1,6 +1,6 @@
 {
   "name": "pi-ops",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Ops operator for Pi: persistent memory, scheduled checks and multi-session reporting",
   "type": "module",
   "files": [
@@ -48,5 +48,8 @@
     "memory",
     "cron"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  }
 }

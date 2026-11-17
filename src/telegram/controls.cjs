@@ -30,7 +30,7 @@ async function flushCards(db, settings, api, signal) {
 		try {
 			if (!card.message_id) {
 				db.prepare("UPDATE tg_cards SET status='sending' WHERE session_id=?").run(card.session_id);
-				const message = await api('sendMessage', { ...params, message_thread_id: card.topic_id }, signal);
+				const message = await api('sendMessage', { ...params, message_thread_id: card.topic_id, disable_notification: true }, signal);
 				db.prepare("UPDATE tg_cards SET message_id=?,status='ready' WHERE session_id=?").run(message.message_id, card.session_id);
 				card.message_id = message.message_id;
 			} else await api('editMessageText', { ...params, message_id: card.message_id }, signal);

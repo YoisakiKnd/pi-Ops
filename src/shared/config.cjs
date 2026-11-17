@@ -22,6 +22,7 @@ const DEFAULTS = Object.freeze({
 		maxConcurrentPerTask: 1,
 	},
 	telegram: {
+		notifications: "silent",
 		enabled: false,
 		chatId: "",
 		allowedUserId: "",

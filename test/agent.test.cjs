@@ -128,10 +128,19 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 	fs.writeFileSync(path.join(projectRoot, 'AGENTS.md'), 'Project context: sdkprojectmarker.');
 	memory.appendFact({ scope: project.scope, body: 'sdkmemorymarker deployment uses port 8443' });
 	const contexts = [];
+	const telegramFinals = [], telegramDrafts = [];
+	const { attachTelegram } = require('../src/telegram/client.cjs');
 	let session;
 	let step = 0;
 	let longRun=false;
-	const facade = { ...sdk, createAgentSession: async options => {
+	const facade = { ...sdk, DefaultResourceLoader: class extends sdk.DefaultResourceLoader {
+		constructor(options) {
+			super({...options, extensionFactories:[...options.extensionFactories, pi => attachTelegram(pi, {
+				readSettings:()=>true, makeClient:()=>({open:async()=>{},close:async()=>{},status:()=>{},
+					draft:text=>telegramDrafts.push(text),final:text=>telegramFinals.push(text)}),
+			})]});
+		}
+	}, createAgentSession: async options => {
 		assert.equal(Object.hasOwn(options,'tools'),false,'SDK must inherit Pi tool settings');
 		const runtime = await sdk.ModelRuntime.create({ refreshOnCreate: false, authPath: path.join(dir, 'offline-auth.json'), modelsPath: null });
 		const model = runtime.getModels('openai')[0]; assert.ok(model);
@@ -145,6 +154,7 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 			] : step === 2 ? [{ type: 'toolCall', id: 'report', name: 'ops_report', arguments: { outcome: 'healthy', summary: 'Verified project and memory' } }]
 				: [{ type: 'text', text: 'Audit complete.' }];
 			const stopReason = content.some(block=>block.type==='toolCall')?'toolUse':'stop';
+			if (stopReason === 'toolUse') content.unshift({type:'text',text:'Checking the next item…'});
 			const message = { role: 'assistant', content, api: selected.api, provider: selected.provider, model: selected.id,
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, timestamp: Date.now() };
 			const stream = ai.createAssistantMessageEventStream();
@@ -159,6 +169,8 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 		id: 'sdk-task', name: 'SDK audit', cwd: projectRoot, project_id: project.id, newSessionId:'17d4ad96-5914-48c4-87ed-d495d540a8a3' };
 	const result = await executeSession(task, { sdk: facade, runId: 'sdk-run', onProgress: value => progress.push(value) });
 	assert.equal(result.status, 'success'); assert.equal(result.outcome, 'healthy'); assert.equal(result.output, 'Audit complete.');
+	assert.deepEqual(telegramFinals, ['Audit complete.']);
+	assert.ok(telegramDrafts.includes('Checking the next item…'));
 	assert.equal(result.sessionId,task.newSessionId);
 	assert.equal(progress.length, 1); assert.ok(fs.existsSync(result.sessionFile));
 	assert.match(JSON.stringify(contexts[0]), /sdkprojectmarker/);
@@ -177,8 +189,10 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 	assert.equal(limited.status, 'unknown');
 	assert.match(limited.summary, /turn limit/);
 	step=0;longRun=true;
+	const sentBeforeLongRun=telegramFinals.length;
 	const unrestricted=await executeSession(task,{sdk:facade,runId:'beyond-old-cap'});
 	assert.equal(unrestricted.status,'success');assert.ok(unrestricted.turns>12);
+	assert.deepEqual(telegramFinals.slice(sentBeforeLongRun), ['Audit complete.'], '15 provider turns produce one final Telegram answer');
 });
 
 

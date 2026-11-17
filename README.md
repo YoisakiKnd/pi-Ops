@@ -56,8 +56,19 @@ prompt. Bot identity and allowed user are checked on incoming messages.
 
 Reply inside a session's topic to reach that exact Pi session. An idle session starts
 a new turn; a busy session receives steering input. Send `/stop` in that topic to
-abort it. Assistant text is streamed as a best-effort draft and sent as durable plain
-text chunks when complete; thinking and raw tool outputs are excluded.
+abort it. Assistant text is streamed as a best-effort draft. Only the final answer
+is sent durably when the task settles; tool-use commentary stays in drafts. Markdown
+headings, bold/italic/strikethrough, quotes, links and code blocks render through native
+Telegram entities. Long answers preserve formatting across Unicode-safe chunks;
+tables use readable text rows. Thinking and raw tool outputs are excluded.
+
+Messages are **silent by default**, and the pinned status card updates in place.
+Set `telegram.notifications` in `config.json` to `"important"` to enable alerts for
+questions, incidents and wake/action failures, or `"all"` for ordinary replies too.
+Status cards and continuation chunks always stay silent. Silent messages can still
+appear in Telegram notifications, depending on your phone's settings; mute the bot
+or topic in Telegram if you also want to suppress those notifications.
+Restart the broker/service after changing this setting.
 
 If a session is disconnected, incoming text remains queued. Reconnection reuses the
 saved topic and delivers pending messages. With `telegram.wakeMode` enabled, a known

@@ -1,3 +1,4 @@
+const { formatMarkdown } = require('./format.cjs');
 // Tables share schedule.db so one leader owns both scheduling and TG delivery.
 function initialize(db) {
 	db.exec(`CREATE TABLE IF NOT EXISTS tg_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -38,15 +39,15 @@ function getSession(db, id) { return db.prepare('SELECT * FROM tg_sessions WHERE
 function enqueue(db, key, id, text) {
 	if (!getSession(db, id)) throw new Error('Unknown session');
 	if (typeof text !== 'string' || text.length > 100000) throw new Error('Invalid outgoing text');
-	const chunks = []; let chunk = '';
-	for (const char of text) {
-		if (chunk.length + char.length > 3500) { chunks.push(chunk); chunk = ''; }
-		chunk += char;
-	}
-	chunks.push(chunk);
-	for (const [index, part] of chunks.entries()) {
-		db.prepare('INSERT OR IGNORE INTO tg_outbox(key,session_id,text) VALUES(?,?,?)').run(`${key}:${index}`, id, part);
-	}
+	atomic(db, () => {
+		// Keep the original persisted chunks on reconnect, including queues from
+		// older formatting versions whose chunk boundaries may differ.
+		if (db.prepare('SELECT 1 FROM tg_outbox WHERE key=?').get(`${key}:0`)) return;
+		for (const [index, part] of formatMarkdown(text).entries()) {
+			db.prepare('INSERT OR IGNORE INTO tg_outbox(key,session_id,text,payload) VALUES(?,?,?,?)')
+				.run(`${key}:${index}`, id, part.text, JSON.stringify({ entities: part.entities, continuation: index > 0 }));
+		}
+	});
 }
 function ingest(db, update, settings) {
 	return atomic(db, () => {

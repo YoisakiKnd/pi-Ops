@@ -7,6 +7,7 @@ const { runAgent } = require('../schedule/agent.cjs');
 const { validateAgent } = require('../schedule/agent-spec.cjs');
 const state = require('./store.cjs');
 const { createApi } = require('./api.cjs');
+const { formatMarkdown, silent } = require('./format.cjs');
 const { send, readLines } = require('./protocol.cjs');
 const controls = require('./controls.cjs');
 const { receiveFile, uploadFile } = require('./files.cjs');
@@ -56,6 +57,9 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 			if(message.type==='questionAck'){db.prepare('UPDATE tg_questions SET delivered=1 WHERE request_id=? AND session_id=?').run(message.requestId,sessionId);return;}
 			if (message.type === 'status') {
 				controls.setStatus(db, sessionId, message.phase, message.detail || '');
+				if (['Ready', 'Stopped', 'Error'].includes(message.phase)) {
+					for (const [key, draft] of streams) if (draft.sessionId === sessionId) streams.delete(key);
+				}
 				if (typeof message.prompt === 'string') db.prepare('UPDATE tg_sessions SET last_prompt=? WHERE id=?').run(message.prompt.slice(0,20000), sessionId);
 				return;
 			}
@@ -114,9 +118,10 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 					const upload = item.kind === 'file' ? uploadFile(state.getSession(db,item.session_id).cwd,payload.file) : null;
 					db.prepare("UPDATE tg_outbox SET status='sending' WHERE key=?").run(item.key);
 					// Each queued row is already one bounded Telegram chunk.
+					const disable_notification = silent(settings, /^(incident:|wake-result:|action-error:)/.test(item.key), payload.continuation);
 					const sent = upload
-						? await api('sendDocument', { chat_id:settings.chatId, message_thread_id:threadId, caption:payload.caption }, controller.signal, upload)
-						: await api('sendMessage', { chat_id:settings.chatId, ...(threadId ? {message_thread_id:threadId} : {}), text:item.text || '(empty response)' }, controller.signal);
+						? await api('sendDocument', { chat_id:settings.chatId, message_thread_id:threadId, caption:payload.caption, disable_notification }, controller.signal, upload)
+						: await api('sendMessage', { chat_id:settings.chatId, ...(threadId ? {message_thread_id:threadId} : {}), text:item.text || '(empty response)', entities:payload.entities || [], disable_notification, link_preview_options:{is_disabled:true} }, controller.signal);
 					db.prepare("UPDATE tg_outbox SET status='sent',message_id=?,error=NULL WHERE key=?").run(sent.message_id, item.key);
 				} catch (failure) {
 					const retry = failure.code === 429;
@@ -132,7 +137,8 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 					// Telegram draft IDs are stable positive integers for this stream.
 					const { createHash } = require('node:crypto');
 					const draftId = createHash('sha256').update(key).digest().readUInt32BE(0) || 1;
-					await api('sendMessageDraft', { chat_id: settings.chatId, message_thread_id: threadId, draft_id: draftId, text: [...draft.text].slice(-1700).join('') || 'Working…' }, controller.signal);
+					const formatted = formatMarkdown(draft.text, 1700).at(-1);
+					await api('sendMessageDraft', { chat_id: settings.chatId, message_thread_id: threadId, draft_id: draftId, ...formatted, text:formatted.text || 'Working…' }, controller.signal);
 				} catch { /* Drafts are best effort; the final answer is durable. */ }
 			}
 			await controls.flushCards(db, settings, api, controller.signal);
@@ -208,7 +214,7 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 							state.register(db,{id,cwd,name:path.basename(cwd),projectId:project.id});
 							db.prepare('INSERT OR IGNORE INTO tg_remote(session_id,update_id) VALUES(?,?)').run(id,action.update_id);
 							await topic(id);
-							state.enqueue(db,`new:${action.update_id}`,id,request.prompt ? 'Remote Pi session created; starting your prompt.' : 'Remote Pi session ready. Reply in this topic to start working.');
+							if (!request.prompt) state.enqueue(db,`new:${action.update_id}`,id,'Remote Pi session ready. Reply in this topic to start working.');
 							if (request.prompt) db.prepare("INSERT OR IGNORE INTO tg_inbox(update_id,session_id,text,created_at) VALUES(?,?,?,?)").run(action.update_id,id,request.prompt,Date.now());
 							state.notice(db,`command:${action.update_id}`,`Created Pi session ${id} for ${cwd}. Open its topic to continue.`);
 						} else if (/^\/sessions(?:@\w+)?(?:\s|$)/i.test(payload.text)) {
