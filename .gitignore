@@ -1,0 +1,14 @@
+node_modules/
+.workbuddy/
+.DS_Store
+.env
+.env.*
+*.log
+*.secret
+
+# Local databases and runtime state
+*.db
+*.db-wal
+*.db-shm
+*.sig
+.pi-ops/
