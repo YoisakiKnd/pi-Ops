@@ -1,6 +1,6 @@
 {
   "name": "pi-ops",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ops operator for Pi: persistent memory, scheduled checks and multi-session reporting",
   "type": "module",
   "files": [
@@ -13,6 +13,7 @@
     "README.md",
     "ARCHITECTURE.md",
     "MIGRATION.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

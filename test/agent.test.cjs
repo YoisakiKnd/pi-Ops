@@ -8,7 +8,7 @@ process.env.PI_CODING_AGENT_DIR = path.join(dir, 'agent');
 const store = require('../src/schedule/store.cjs');
 const memory = require('../src/memory/store.cjs');
 const { projectFor } = require('../src/shared/project.cjs');
-const { validateAgent, DEFAULT_TOOLS } = require('../src/schedule/agent-spec.cjs');
+const { validateAgent } = require('../src/schedule/agent-spec.cjs');
 const { runAgent } = require('../src/schedule/agent.cjs');
 const { createEngine } = require('../src/schedule/engine.cjs');
 const { command } = require('../src/schedule/commands.cjs');
@@ -19,10 +19,10 @@ const input = { kind: 'agent', project, name: 'audit', prompt: 'Inspect the curr
 const report = (outcome, status = 'success') => ({ status, outcome, summary: outcome });
 function fixture(t) { const db = store.openSchedule(':memory:'); t.after(() => db.close()); return db; }
 
-test('Agent tasks persist prompts and bounded execution settings', t => {
+test('Agent tasks inherit Pi defaults unless execution settings are explicit', t => {
 	const db = fixture(t); const task = store.addTask(db, input, 0);
 	assert.equal(task.kind, 'agent'); assert.equal(task.prompt, input.prompt);
-	assert.deepEqual(task.tools, DEFAULT_TOOLS); assert.equal(task.timeoutMs, 300_000);
+	assert.equal(task.tools,undefined);assert.equal(task.timeoutMs,undefined);assert.equal(task.maxTurns,undefined);assert.equal(task.maxOutputChars,undefined);
 	for (const bad of [{ prompt: '' }, { tools: ['bash;rm'] }, { maxTurns: 0 }, { timeoutMs: Infinity }]) {
 		assert.throws(() => validateAgent({ ...input, ...bad }));
 	}
@@ -130,18 +130,21 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 	const contexts = [];
 	let session;
 	let step = 0;
+	let longRun=false;
 	const facade = { ...sdk, createAgentSession: async options => {
+		assert.equal(Object.hasOwn(options,'tools'),false,'SDK must inherit Pi tool settings');
 		const runtime = await sdk.ModelRuntime.create({ refreshOnCreate: false, authPath: path.join(dir, 'offline-auth.json'), modelsPath: null });
 		const model = runtime.getModels('openai')[0]; assert.ok(model);
 		await runtime.setRuntimeApiKey(model.provider, 'offline-test-key');
 		runtime.streamSimple = (selected, context) => {
 			contexts.push(context);
-			const content = step++ === 0 ? [
+			const content = longRun ? (++step<=14 ? [{type:'toolCall',id:`report-${step}`,name:'ops_report',arguments:{outcome:'healthy',summary:'progress'}}] : [{type:'text',text:'Audit complete.'}]) : step++ === 0 ? [
 				{ type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'AGENTS.md' } },
+				{ type:'toolCall',id:'bash',name:'bash',arguments:{command:'printf pi-ops-shell-ok'} },
 				{ type: 'toolCall', id: 'search', name: 'memory_search', arguments: { query: 'sdkmemorymarker' } },
 			] : step === 2 ? [{ type: 'toolCall', id: 'report', name: 'ops_report', arguments: { outcome: 'healthy', summary: 'Verified project and memory' } }]
 				: [{ type: 'text', text: 'Audit complete.' }];
-			const stopReason = step <= 2 ? 'toolUse' : 'stop';
+			const stopReason = content.some(block=>block.type==='toolCall')?'toolUse':'stop';
 			const message = { role: 'assistant', content, api: selected.api, provider: selected.provider, model: selected.id,
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, timestamp: Date.now() };
 			const stream = ai.createAssistantMessageEventStream();
@@ -161,7 +164,9 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 	assert.match(JSON.stringify(contexts[0]), /sdkprojectmarker/);
 	assert.match(JSON.stringify(contexts[0]), /sdkmemorymarker deployment uses port 8443/);
 	const results = session.messages.filter(message => message.role === 'toolResult');
-	assert.equal(results.length, 3); assert.ok(results.every(message => !message.isError));
+	assert.equal(results.length, 4);
+	assert.ok(session.getActiveToolNames().includes('bash'));assert.ok(session.getActiveToolNames().includes('edit'));assert.ok(session.getActiveToolNames().includes('write'));
+	assert.match(JSON.stringify(results.find(message=>message.toolCallId==='bash')),/pi-ops-shell-ok/); assert.ok(results.every(message => !message.isError));
 	step = 0;
 	const resumed = await executeSession({ ...task, wake: true, resumeSessionFile: result.sessionFile }, { sdk: facade, runId: 'telegram-resume' });
 	assert.equal(resumed.sessionId, result.sessionId);
@@ -171,4 +176,22 @@ test('real Pi SDK executes tools, loads project context and injects operational 
 	const limited = await executeSession({ ...task, maxTurns: 1 }, { sdk: facade, runId: 'turn-limited' });
 	assert.equal(limited.status, 'unknown');
 	assert.match(limited.summary, /turn limit/);
+	step=0;longRun=true;
+	const unrestricted=await executeSession(task,{sdk:facade,runId:'beyond-old-cap'});
+	assert.equal(unrestricted.status,'success');assert.ok(unrestricted.turns>12);
+});
+
+
+test('upgrading legacy Agent tasks removes injected defaults and preserves custom settings',()=>{
+ const file=path.join(dir,'legacy-policy.db');let db=store.openSchedule(file);
+ const task=store.addTask(db,input,0);
+ const legacy={kind:'agent',prompt:input.prompt,intervalMs:300000,failureThreshold:3,tools:['read','grep','find','ls','memory_search','memory_save','ops_report'],timeoutMs:300000,maxTurns:12,maxOutputChars:32000};
+ db.prepare('UPDATE tasks SET spec=? WHERE id=?').run(JSON.stringify(legacy),task.id);
+ const custom=store.addTask(db,{...input,tools:['bash'],maxTurns:99,timeoutMs:900000},0);
+ const customSpec={...custom};delete customSpec.policyVersion;delete customSpec.spec;
+ db.prepare('UPDATE tasks SET spec=? WHERE id=?').run(JSON.stringify(customSpec),custom.id);
+ db.close();db=store.openSchedule(file);
+ try{const upgraded=store.getTask(db,task.id);assert.equal(upgraded.tools,undefined);assert.equal(upgraded.maxTurns,undefined);assert.equal(upgraded.timeoutMs,undefined);assert.equal(upgraded.maxOutputChars,undefined);
+ const retained=store.getTask(db,custom.id);assert.deepEqual(retained.tools,['bash','ops_report']);assert.equal(retained.maxTurns,99);assert.equal(retained.timeoutMs,900000);
+ }finally{db.close();}
 });

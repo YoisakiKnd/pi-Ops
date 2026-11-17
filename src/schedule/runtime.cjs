@@ -115,7 +115,7 @@ async function requestDaemon(endpoint = '/status', { method = 'GET', timeoutMs =
 	let token;
 	try { token = getToken(db); } finally { db.close(); }
 	const response = await fetch(`http://127.0.0.1:${port ?? settings().port}${endpoint}`, {
-		method, headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs),
+		method, headers: { authorization: `Bearer ${token}` }, signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs),
 	});
 	const body = await response.json();
 	if (!response.ok) throw new Error(body.error || `Scheduler returned ${response.status}`);

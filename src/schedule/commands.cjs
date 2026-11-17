@@ -73,7 +73,7 @@ async function command(args, cwd = process.cwd()) {
 		if (action === 'run') {
 			const task = requireTask();
 			return JSON.stringify(await runtime.requestDaemon(`/run?id=${encodeURIComponent(task.id)}`, {
-				method: 'POST', timeoutMs: task.timeoutMs + 5000,
+				method: 'POST', timeoutMs: task.timeoutMs === undefined ? null : task.timeoutMs + 5000,
 			}), null, 2);
 		}
 		throw new Error(HELP);

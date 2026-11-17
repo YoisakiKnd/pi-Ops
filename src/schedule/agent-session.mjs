@@ -26,15 +26,18 @@ export async function executeSession(task, { runId, signal, onProgress = () => {
 	const sessionManager = task.resumeSessionFile
 		? pi.SessionManager.open(task.resumeSessionFile, undefined, task.cwd)
 		: pi.SessionManager.create(task.cwd, path.join(paths.OPS_DIR, 'tasks', 'sessions', task.id), task.newSessionId ? { id: task.newSessionId } : undefined);
+	const settingsManager = pi.SettingsManager.create(task.cwd, paths.AGENT_DIR);
 	const loader = new pi.DefaultResourceLoader({
+		settingsManager,
+		extensionFactories: [pi.createCodemodeExtension(), pi.createToolSearchExtension(), pi.createMcpExtension()],
 		cwd: task.cwd, agentDir: paths.AGENT_DIR,
 		additionalExtensionPaths: [fileURLToPath(new URL('../../index.ts', import.meta.url))],
 	});
 	await loader.reload();
 	if (signal?.aborted) throw new Error('Agent run cancelled during startup');
 	const { session, extensionsResult } = await pi.createAgentSession({
-		cwd: task.cwd, agentDir: paths.AGENT_DIR, resourceLoader: loader, sessionManager,
-		tools: task.tools,
+		cwd: task.cwd, agentDir: paths.AGENT_DIR, resourceLoader: loader, sessionManager, settingsManager,
+		...(task.tools === undefined ? {} : { tools: task.tools }),
 		customTools: [{
 			name: 'ops_report', label: 'Report scheduled task outcome',
 			description: 'Record the observed environment outcome with evidence in the summary. healthy = verified healthy; degraded = verified problem; unknown = insufficient evidence. Execution errors are not proof of a service incident.',
@@ -48,10 +51,10 @@ export async function executeSession(task, { runId, signal, onProgress = () => {
 	const progress = { sessionFile: sessionManager.getSessionFile(), sessionId: sessionManager.getSessionId() };
 	const cancel = () => { void session.abort(); };
 	const unsubscribe = session.subscribe(event => {
-		if (event.type === 'turn_start' && ++turns > task.maxTurns) budgetError = 'Agent turn limit exceeded';
+		if (event.type === 'turn_start') { turns++; if(task.maxTurns !== undefined && turns > task.maxTurns) budgetError = 'Agent turn limit exceeded'; }
 		if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
 			outputChars += event.assistantMessageEvent.delta.length;
-			if (outputChars > task.maxOutputChars) budgetError = 'Agent output limit exceeded';
+			if (task.maxOutputChars !== undefined && outputChars > task.maxOutputChars) budgetError = 'Agent output limit exceeded';
 		}
 		if (budgetError) cancel();
 	});
@@ -61,13 +64,9 @@ export async function executeSession(task, { runId, signal, onProgress = () => {
 		if (extensionsResult.errors.length) throw new Error(`Pi extension load failed: ${extensionsResult.errors.map(error => error.error).join('; ').slice(0, 2000)}`);
 		await session.bindExtensions({ mode: 'print' });
 		if (signal?.aborted) throw new Error('Agent run cancelled during startup');
-		const active = session.getActiveToolNames();
-		if (!active.includes('ops_report') || (task.tools.includes('memory_search') && !active.includes('memory_search'))) {
-			throw new Error('Required Pi Ops tools were not loaded');
-		}
 		await session.prompt(task.wake ? task.prompt : `Scheduled Pi Ops task: ${task.name}\nTask ID: ${task.id}\nRun ID: ${runId}\nExecute the task below using this project and its operational memory. Before finishing, call ops_report with an evidence-based environment outcome.\n\n${task.prompt}`, { expandPromptTemplates: false, source: 'extension' });
 		const last = [...session.messages].reverse().find(message => message.role === 'assistant');
-		const output = (session.getLastAssistantText() || '').slice(0, task.maxOutputChars);
+		const output = (session.getLastAssistantText() || '').slice(0, task.maxOutputChars ?? 100000);
 		if (signal?.aborted || budgetError || last?.stopReason === 'aborted') {
 			return { ...progress, status: 'unknown', outcome: 'unknown', summary: budgetError || 'Agent run interrupted', output, turns };
 		}

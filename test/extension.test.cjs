@@ -255,7 +255,7 @@ test('Pi Agent can schedule a prompt through ops_schedule and see startup status
 		try {
 			const task = scheduler.getTask(db, result.details.taskId);
 			assert.equal(task.kind, 'agent'); assert.equal(task.prompt, '检查项目部署状态');
-			assert.equal(task.intervalMs, 3600000); assert.ok(task.tools.includes('memory_search'));
+			assert.equal(task.intervalMs, 3600000); assert.equal(task.tools,undefined);assert.equal(task.maxTurns,undefined);
 		} finally { db.close(); }
 		runtime.launchDaemon = async () => { throw new Error('occupied port'); };
 		const saved = await tool.execute('schedule-start-failure', { name: 'audit-2', prompt: '检查部署', everySeconds: 3600 }, undefined, undefined, ctx);

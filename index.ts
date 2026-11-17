@@ -255,15 +255,15 @@ export default function piOps(pi: ExtensionAPI): void {
 		name: "ops_schedule",
 		label: "Schedule Pi Agent task",
 		promptSnippet: "Schedule recurring project work in a Pi Agent session with operational memory.",
-		promptGuidelines: ["Use ops_schedule when the user explicitly asks Pi to perform recurring work. Include a self-contained prompt and select only the tools needed by that task."],
-		description: "Schedule a recurring prompt to run in an independent Pi Agent session in this project. Use when the user asks for recurring work. Each run loads this project's context and operational memory. By default only file inspection, memory and outcome-reporting tools are enabled; specify tools when the task needs other capabilities. Saves the task and starts the scheduler. Interrupted runs require inspection and an explicit resume.",
+		promptGuidelines: ["Use ops_schedule when the user explicitly asks Pi to perform recurring work. Include a self-contained prompt and inherit Pi defaults unless the user explicitly requests different tools or limits."],
+		description: "Schedule a recurring prompt to run in an independent Pi Agent session in this project. Use when the user asks for recurring work. Each run loads this project's context and operational memory. Inherits Pi tools, extensions, MCP, model and settings by default. Only set tools or execution limits when the user explicitly requests them. Saves the task and starts the scheduler. Interrupted runs require inspection and an explicit resume.",
 		parameters: Type.Object({
 			name: Type.String({ minLength: 1, maxLength: 200 }),
 			prompt: Type.String({ minLength: 1, maxLength: 20_000 }),
 			everySeconds: Type.Integer({ minimum: 1, maximum: 31_536_000 }),
 			timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
 			tools: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 50 })),
-			maxTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+			maxTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: 100000 })),
 		}, { additionalProperties: false }),
 		async execute(_id, params, _signal, _update, ctx) {
 			if (readConfig().schedule?.enabled === false) throw new Error("Scheduling is disabled in config.json");

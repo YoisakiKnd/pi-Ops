@@ -63,7 +63,8 @@ If a session is disconnected, incoming text remains queued. Reconnection reuses 
 saved topic and delivers pending messages. With `telegram.wakeMode` enabled, a known
 session with a saved transcript can resume automatically inside `wakeAllowedRoots`.
 It opens that same Pi session/transcript through the SDK. These wake sessions use the
-inspection/memory tool policy by default, a five-minute timeout and bounded turns;
+same Pi tool/model/settings configuration as a normal Pi session, without plugin-imposed
+tool restrictions, turn caps or execution deadlines;
 local side effects from an interrupted run require inspection before retrying.
 
 The first Pi client tries the existing broker, then starts a detached daemon, then
@@ -136,7 +137,8 @@ inside `wakeAllowedRoots`. Relative paths and an omitted folder use
 `telegram.wakeDefaultCwd`, set to the allowed root by setup. The form without a prompt
 creates a topic and reserved Pi session ID without calling a model; replying there
 starts the session. `/sessions` lists known sessions.
-New sessions use the same inspection/memory tools and limits as offline wake.
+New sessions inherit the same Pi configuration as offline wake, including normal
+command/file tools and configured extensions/MCP.
 `/clone <https-repository-url> [folder-name]` clones into `wakeDefaultCwd` and creates
 a session topic. Only credential-free HTTPS URLs are accepted. Existing destinations
 are refused; failed or interrupted clone directories are retained for inspection.
@@ -295,16 +297,23 @@ It does not inject a prompt into your currently open conversation. Reusing live
 interactive sessions is a later feature. Configure a working model/login in Pi
 before executing Agent tasks; model calls use that provider's normal billing.
 
-Default tools are `read`, `grep`, `find`, `ls`, `memory_search`, `memory_save`, and
-`ops_report`. The scheduling tool accepts an explicit `tools` list when a task needs
-additional capabilities such as `bash`. `ops_report` is always included. A tool
-allowlist controls available tools, not an OS sandbox. SDK sessions discover normal
-extensions and skills; CLI built-in MCP/codemode integration is not added here.
+Tools and execution behavior are inherited from Pi settings by default. Pi Ops does
+not impose a read-only allowlist, a twelve-turn cap, an output-driven abort, or a
+five-minute execution deadline. The worker loads the standard codemode, tool-search
+and MCP extension factories alongside the project's configured extensions and skills.
+Pi's own model, tool selection and permission behavior still apply.
 
-Default limits are five minutes, twelve Agent turns, and 32,000 streamed text
-characters. `ops_schedule` accepts `timeoutSeconds` and `maxTurns` overrides.
-The run result includes bounded final output, elapsed time, session ID and transcript
-path. The full transcript is stored under `tasks/sessions/<task-id>/`.
+Only explicitly requested per-task `tools`, `maxTurns`, `timeoutSeconds` or output
+limits override the inherited behavior. The stored result contains up to 100,000
+characters of final text; this storage excerpt does not stop the Agent. Full output
+remains in the Pi transcript. Telegram message chunking likewise does not limit
+Agent execution.
+
+On upgrade, pre-policyVersion tasks have the former injected defaults removed:
+the exact old inspection-tool list, 12 turns, 32,000 output characters and 300,000ms
+timeout. Other custom values are preserved. Previously interrupted scheduled tasks
+remain paused until explicitly resumed; the upgrade does not replay partial work.
+Restart the broker and reload open Pi sessions after updating.
 
 Execution state is separate from the environment outcome. The Agent calls
 `ops_report` with `healthy`, `degraded`, or `unknown`, plus an evidence-based summary.

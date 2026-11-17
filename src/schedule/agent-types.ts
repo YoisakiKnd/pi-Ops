@@ -4,9 +4,9 @@ export interface AgentTask {
 	cwd: string;
 	project_id: string;
 	prompt: string;
-	tools: string[];
-	maxTurns: number;
-	maxOutputChars: number;
+	tools?: string[];
+	maxTurns?: number;
+	maxOutputChars?: number;
 	resumeSessionFile?: string;
 	newSessionId?: string;
 	wake?: boolean;

@@ -155,7 +155,7 @@ function createBroker(db, settings, { api = createApi(settings), wake = runAgent
 				db.prepare("UPDATE tg_inbox SET status='waking' WHERE update_id=?").run(item.update_id);
 				wakeIds.add(session.id);
 				const wakeController = new AbortController(); wakeControllers.set(session.id, wakeController);
-				const spec = validateAgent({ prompt: item.text, timeoutMs: settings.wakeTimeoutMs || 300000 });
+				const spec = validateAgent({ prompt: item.text, timeoutMs: settings.wakeTimeoutMs });
 				track(wake({ ...spec, id: session.id, name: session.name, cwd, project_id: projectFor(cwd).id, resumeSessionFile: fresh ? undefined : session.session_file, newSessionId: fresh ? session.id : undefined, wake: true }, {
 					runId: `telegram-${item.update_id}`, signal: AbortSignal.any([controller.signal,wakeController.signal]),
 					onProgress: progress => { if(progress.sessionId === session.id && progress.sessionFile) db.prepare('UPDATE tg_sessions SET session_file=? WHERE id=?').run(progress.sessionFile,session.id); },

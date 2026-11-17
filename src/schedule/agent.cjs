@@ -23,11 +23,11 @@ function runAgent(task, { signal, runId, onProgress = () => {}, workerPath = pat
 		};
 		const abort = () => cancel('cancelled');
 		signal?.addEventListener('abort', abort, { once: true });
-		const timer = setTimeout(() => cancel('timeout'), task.timeoutMs);
+		const timer = task.timeoutMs === undefined ? undefined : setTimeout(() => cancel('timeout'), task.timeoutMs);
 		for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => {
 			bytes += chunk.length;
 			diagnostics = (diagnostics + chunk.toString()).slice(-2000);
-			if (bytes > task.maxOutputChars * 4) cancel('output limit');
+			if (task.maxOutputChars !== undefined && bytes > task.maxOutputChars * 4) cancel('output limit');
 		});
 		child.on('message', message => {
 			if (message?.type === 'progress') {

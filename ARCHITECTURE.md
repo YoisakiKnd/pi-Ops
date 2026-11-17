@@ -94,7 +94,7 @@ Scheduling requires Node's SQLite support; memory can still fall back to a scan.
 
 A task stores its kind, project ID, cwd, name, interval, timeout, failure threshold,
 enabled/blocked state and next due time. HTTP specs contain URL and expected status;
-Agent specs contain prompt, tool allowlist, turn limit and output bound. First run is one interval after
+Agent specs contain a prompt and optional explicit tool/limit overrides. First run is one interval after
 creation. Intervals use epoch milliseconds; no timezone or daylight-saving
 interpretation is needed. Cron and wall-clock schedules are not yet implemented.
 
@@ -133,24 +133,25 @@ The worker imports the installed Pi SDK and calls the typed `executeSession` ada
 
 1. Verify the saved cwd still resolves to the saved project identity.
 2. Load normal project resources plus an explicit path to the Pi Ops extension.
-3. Create a persistent `SessionManager` and `createAgentSession` with a tool allowlist.
+3. Create a persistent `SessionManager` and `createAgentSession` without overriding Pi tool defaults unless the task explicitly supplies a selection.
 4. Bind extensions so session hooks, memory scope and index preparation run.
 5. Prompt with task/run metadata and the saved user instructions.
 6. Capture final text, structured report and session identifiers; dispose the session
    and settle pending credential writes before returning the result.
 
-The parent records session progress while the run is still active, applies an
-independent wall-clock timeout, bounds stdout/stderr, and waits for worker exit
-before committing completion. The SDK adapter bounds turns and streamed text.
+The parent records session progress while the run is still active, applies only
+explicit execution limits, retains bounded diagnostics, and waits for worker exit
+before committing completion. The SDK adapter enforces turn/text limits only when explicitly supplied by the task.
 Workers receive abort via IPC; parent disconnect also triggers abort. A hard deadline
 handles extensions/providers that do not respond to cancellation. Forced termination
 cannot guarantee cleanup of arbitrary external processes launched by tools.
 
-The default tool set provides file inspection, memory search/save and `ops_report`.
-Tasks can explicitly select additional tools; reporting remains available. These
-are Pi tool permissions, not filesystem/process isolation. SDK sessions use Pi's
-configured model/auth defaults. MCP/codemode CLI built-ins are not installed by this
-adapter. Other user extensions and skills use standard SDK discovery.
+The adapter inherits Pi's settings, built-in tools and configured extensions. Standard
+codemode, tool-search and MCP factories are loaded as in the Pi SDK CLI integration
+example. No default tool allowlist, turn cap, output abort or execution timeout is
+imposed. Explicit task overrides are optional. The final result storage excerpt is
+bounded without aborting the Agent; the persistent Pi transcript contains the full run.
+Legacy injected defaults are migrated transactionally while custom values remain.
 
 Agent reports separate execution from observation. `status=success` means the Agent
 finished; `outcome=healthy|degraded|unknown` describes the environment. Only degraded
@@ -226,8 +227,7 @@ transcript. It reserves one pending message for that session and runs the existi
 Agent worker with SessionManager.open. The worker registers the restored session
 and streams output through the same bridge. Additional messages can steer that
 connected session. Interrupted wake deliveries become uncertain, requiring user
-inspection rather than automatic replay. Wake uses the inspection/memory tool
-allowlist and bounded runtime by default.
+inspection rather than automatic replay. Wake inherits Pi tools and configuration without plugin-imposed execution caps.
 
 Broker shutdown aborts the TG long poll, cancels wakes, drains active work and closes
 client sockets before releasing the elected listener. Scheduling and TG are never

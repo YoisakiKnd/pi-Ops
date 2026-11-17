@@ -3,7 +3,7 @@ const path = require('node:path');
 const { randomUUID, randomBytes } = require('node:crypto');
 const { OPS_DIR } = require('../shared/paths.cjs');
 const { validateHttp } = require('./probe.cjs');
-const { validateAgent } = require('./agent-spec.cjs');
+const { validateAgent, upgradeLegacySpec } = require('./agent-spec.cjs');
 
 function openSchedule(file = path.join(OPS_DIR, 'schedule.db')) {
 	const { DatabaseSync } = require('node:sqlite');
@@ -37,6 +37,10 @@ function openSchedule(file = path.join(OPS_DIR, 'schedule.db')) {
 		atomic(db, () => {
 			if (!db.prepare('PRAGMA table_info(tasks)').all().some(column => column.name === 'blocked')) {
 				db.exec('ALTER TABLE tasks ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0');
+			}
+			for (const row of db.prepare('SELECT id,spec FROM tasks').all()) {
+				const upgraded=upgradeLegacySpec(JSON.parse(row.spec));
+				if(upgraded)db.prepare('UPDATE tasks SET spec=? WHERE id=?').run(JSON.stringify(upgraded),row.id);
 			}
 		});
 		db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('token', randomBytes(32).toString('hex'));
